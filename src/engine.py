@@ -1,16 +1,18 @@
+import io
 from kokoro import KPipeline # Takes in raw text and turns it into audio
 import numpy as np # Stores audio waves as numbers in an array
 import soundfile as sf # used to make numpy array into binary for audio extraction in .wav file
 
 pipeline = KPipeline(lang_code="a") # Choosing american voice to output
 
+# Takes in the text from a PDF and makes it into a .wav file
 def text_to_speech(text: str, outputPath: str = "output.wav", voice: str = "af_heart"):
 
     print("Generating speech audio...")
     generator = pipeline(text, voice=voice, speed=1.0, split_pattern=r"\n+") 
     allAudio: list = [] # Stores audio
 
-    for i, (gs, ps, audio) in enumerate(generator): # concats each sentence into a single array
+    for gs, ps, audio in generator: # concats each sentence into a single array
         allAudio.append(audio)
 
     if not allAudio:
@@ -23,6 +25,36 @@ def text_to_speech(text: str, outputPath: str = "output.wav", voice: str = "af_h
     sf.write(outputPath, completeAudio, 24000) 
     print(f"Audio saved successfully to {outputPath}")
 
-if __name__ == "__main__": # Audio test
+
+# Works same as text_to_speech but returns the .wav data into memory using RAM
+def text_to_audio_bytes(text: str, voice: str = "af_heart") -> bytes:
+
+    generator = pipeline(text, voice = voice, speed = 1.0)
+
+    audio_blocks: list = [] # stores audio blocks
+
+    for graphemes, phonemes, audio in generator: # Concats each sentence into single array
+        audio_blocks.append(audio)
+
+    if not audio_blocks:
+        return b""
+
+    complete_audio = np.concatenate(audio_blocks) # Combines block into single array
+    buffer = io.BytesIO() # Byte buffer for RAM not hardrive
+
+    # Gets audio data into the buffer at normal speed (24K HZ) in .wav format
+    sf.write(buffer, complete_audio, 24000, format="WAV")
+
+    return buffer.getvalue()
+
+
+if __name__ == "__main__": # Audio tests
     sample_text = "Welcome to Page 2 Speech! Your PDF to audio converter is working."
+
+    # Test 1: File output test
     text_to_speech(sample_text, "test_output.wav") 
+
+    # Test 2: Memory byte test
+    audio_bytes = text_to_audio_bytes(sample_text)
+    print(f"Success, Generated {len(audio_bytes)} bytes in RAM")
+
