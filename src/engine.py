@@ -1,4 +1,5 @@
 import io
+from typing import Generator
 from kokoro import KPipeline # Takes in raw text and turns it into audio
 import numpy as np # Stores audio waves as numbers in an array
 import soundfile as sf # used to make numpy array into binary for audio extraction in .wav file
@@ -47,7 +48,19 @@ def text_to_audio_bytes(text: str, voice: str = "af_heart") -> bytes:
 
     return buffer.getvalue()
 
+# Yields raw 16-bit PCM audio bytes sentence by sentence for WebSocket streaming
+def text_to_pcm_stream(text: str, voice: str = "af_heart") -> Generator[bytes, None, None]:
 
+    generator = pipeline(text, voice=voice, speed=1.0)
+
+    for graphemes, phonemes, audio in generator:
+        if audio is not None and len(audio) > 0: # If audio exists, convert and send it
+            audio_np = audio.numpy() if hasattr(audio, "numpy") else np.array(audio)
+            
+            # Converts  audio array to 16-bit PCM bytes for chunk streaming
+            pcm_array = (audio_np * 32767).astype(np.int16)
+            yield pcm_array.tobytes() # yield sends back bytes without exiting program
+            
 if __name__ == "__main__": # Audio tests
     sample_text = "Welcome to Page 2 Speech! Your PDF to audio converter is working."
 

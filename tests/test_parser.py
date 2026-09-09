@@ -6,7 +6,7 @@ from src.parser import extract_text_chunks
 def test_extract_text_chunks_from_pdf():
 
     # Creates an in-memory PDF to be scanned, using PyMuPDF
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     page.insert_text((50, 50), "Hello World, this is Page 2 Speech.")
 
