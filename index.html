@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Page2Speech Streamer</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
+        .card { border: 1px solid #ccc; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; }
+        button:disabled { background: #cccccc; }
+        #status { margin-top: 15px; font-weight: bold; color: #333; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Page2Speech PDF Streamer</h2>
+        <input type="file" id="pdfInput" accept="application/pdf">
+        <button id="uploadBtn" onclick="uploadAndStream()">Upload & Stream</button>
+        <div id="status">Status: Idle</div>
+    </div>
+
+    <script>
+        let audioCtx = null;
+        let nextStartTime = 0;
+
+        async function uploadAndStream() {
+            const fileInput = document.getElementById('pdfInput');
+            const statusDiv = document.getElementById('status');
+            const uploadBtn = document.getElementById('uploadBtn');
+
+            if (!fileInput.files.length) {
+                alert('Please select a PDF file first.');
+                return;
+            }
+
+            uploadBtn.disabled = true;
+            statusDiv.innerText = 'Status: Uploading PDF...';
+
+            // Initialize Web Audio Context (24kHz standard sample rate for Kokoro)
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            nextStartTime = audioCtx.currentTime;
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                // 1. Send upload request to FastAPI Gateway
+                const response = await fetch('http://localhost:8000/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Upload failed: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                const jobId = data.job_id;
+                statusDiv.innerText = `Status: Job ${jobId} created. Connecting WebSocket...`;
+
+                // 2. Open WebSocket to stream PCM audio chunks
+                const ws = new WebSocket(`ws://localhost:8000/stream/${jobId}`);
+                ws.binaryType = 'arraybuffer';
+
+                ws.onopen = () => {
+                    statusDiv.innerText = 'Status: Streaming audio...';
+                };
+
+                ws.onmessage = (event) => {
+                    playPcmChunk(event.data);
+                };
+
+                ws.onclose = (e) => {
+                    statusDiv.innerText = 'Status: Stream finished.';
+                    uploadBtn.disabled = false;
+                };
+
+                ws.onerror = (err) => {
+                    statusDiv.innerText = 'Status: WebSocket error occurred.';
+                    uploadBtn.disabled = false;
+                };
+
+            } catch (err) {
+                statusDiv.innerText = `Error: ${err.message}`;
+                uploadBtn.disabled = false;
+            }
+        }
+
+        function playPcmChunk(arrayBuffer) {
+            // Convert 16-bit PCM bytes back into floating point samples [-1.0, 1.0]
+            const int16Array = new Int16Array(arrayBuffer);
+            const float32Array = new Float32Array(int16Array.length);
+
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0;
+            }
+
+            const audioBuffer = audioCtx.createBuffer(1, float32Array.length, 24000);
+            audioBuffer.getChannelData(0).set(float32Array);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
+
+            // Queue chunks sequentially without overlaps
+            const startTime = Math.max(audioCtx.currentTime, nextStartTime);
+            source.start(startTime);
+            nextStartTime = startTime + audioBuffer.duration;
+        }
+    </script>
+</body>
+</html>

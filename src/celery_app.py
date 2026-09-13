@@ -1,7 +1,11 @@
+import pathlib
+import logging 
 import redis
 from celery import Celery # Only need Celery class
 from src.parser import extract_text_chunks
 from src.engine import text_to_pcm_stream
+
+logger = logging.getLogger(__name__)
 
 # Initializes Celery with Redis
 celery_app = Celery(
@@ -15,17 +19,34 @@ celery_app = Celery(
 redis_client = redis.Redis(host = "localhost", port = 6379, db = 0)
 
 @celery_app.task
-def process_pdf_task(job_id: str, file_bytes: bytes):
+def process_pdf_task(job_id: str, file_path: str):
 
-    # Extracts each sentence from pdf to be processed
-    text_chunks = extract_text_chunks(file_bytes)
-    channel_name = f"audio_stream:{job_id}" 
+    if isinstance(file_path, bytes):
+        file_path = file_path.decode("utf-8")
+        
+    path = pathlib.Path(file_path)
+    stream_key = f"audio_stream:{job_id}"
 
-    # Have each sentence into audio chunks and push to Redis Pub/Sub 'O(n)'
-    for chunk in text_chunks:
-        for pcm_bytes in text_to_pcm_stream(chunk):
-            redis_client.publish(channel_name, pcm_bytes)
+    # Get the audio chunks and if you can't send an error
+    try:
+        with open(path, "rb") as f:
+            pdf_bytes = f.read()
 
-    redis_client.publish(channel_name, b"__COMPLETE__") # Notifies gateway its done
+        text_chunks = extract_text_chunks(pdf_bytes)
 
-    return {"job_id": job_id, "status": "completed"} #Python Dictionary
+        # Have each sentence into audio chunks and push to Redis Pub/Sub 'O(n)'
+        for chunk in text_chunks:
+            for pcm_bytes in text_to_pcm_stream(chunk):
+                redis_client.xadd(stream_key, {"data": pcm_bytes})
+
+        redis_client.xadd(stream_key, {"data": b"__COMPLETE__"}) # Notifies gateway its done
+        redis_client.expire(stream_key, 3600) # 1 hour experation
+
+        return {"job_id": job_id, "status": "completed"} 
+    except Exception as e:
+        logger.error(f"Task failed for job {job_id}: {e}")
+        raise e
+    # Cleanup
+    finally: 
+        if path.exists():
+            path.unlink()
