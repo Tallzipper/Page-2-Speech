@@ -26,4 +26,6 @@ def process_pdf_task(job_id: str, file_bytes: bytes):
         for pcm_bytes in text_to_pcm_stream(chunk):
             redis_client.publish(channel_name, pcm_bytes)
 
+    redis_client.publish(channel_name, b"__COMPLETE__") # Notifies gateway its done
+
     return {"job_id": job_id, "status": "completed"} #Python Dictionary

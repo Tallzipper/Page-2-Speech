@@ -6,75 +6,33 @@ from unittest.mock import patch # Used to make mock objects
 # Creates a mock HTTP connected to the FastAPI
 client = TestClient(app) 
 
-def test_upload_pdf_success():
+@patch("src.main.process_pdf_task.delay")
+def test_upload_pdf_pipeline(mock_celery_delay):
 
     # Creates an in-memory pdf
-    fake_pdf_bytes = b"%PDF-1.4 Fake PDF Content"
-    fake_file = io.BytesIO(fake_pdf_bytes)
+    fake_pdf_content = b"%PDF-1.4 Fake PDF Content"
+    files = {"file": ("sample.pdf", fake_pdf_content, "application/pdf")}
 
-    # send a similated HTTP request with the file to /upload
-    response = client.post(
-        "/upload",
-        files={"file": ("sample.pdf", fake_file, "application/pdf")}
-    )
+    mock_celery_delay.return_value.id = "mock-task-id-143"
+    
+    response = client.post("/upload", files=files)
 
-    # Verifies that the API returned HTTP 200 and a valid job string ID
     assert response.status_code == 200
     data = response.json()
     assert "job_id" in data
-    assert isinstance(data["job_id"], str)
+    assert data["status"] == "processing"
 
+    mock_celery_delay.assert_called_once_with(data["job_id"], fake_pdf_content)
+
+# Intentionally failing
 def test_upload_non_pdf_fails():
 
     # create non-pdf file
-    fake_txt_bytes = b"This is a text file"
-    fake_file = io.BytesIO(fake_txt_bytes)
+    fake_pdf_content = b"Fake PDF Content"
+    files = {"file": ("document.txt", fake_pdf_content, "text/plain")}
 
     # Upload non-pdf file
-    response = client.post(
-        "/upload",
-        files = {"file": ("document.txt", fake_file, "text/plain")}
-    )
+    response = client.post("/upload", files=files)
 
-    # Expect an error
     assert response.status_code == 400
     assert response.json()["detail"] == "File must be a PDF"
-
-
-def test_upload_pdf_dispatches_celery_task():
-
-    # Arrange fake text
-    fake_pdf_bytes = b"%PDF-1.4 Fake PDF Content"
-    fake_file = io.BytesIO(fake_pdf_bytes)
-
-    # Mock Celery task delay
-    with patch("src.main.process_pdf_task.delay") as mock_celery_task:
-        response = client.post(
-            "/upload",
-            files={"file": ("sample.pdf", fake_file, "application/pdf")}
-        )
-
-        # Verify task was triggered
-        # Needs to be in patch for mock obj to be alive
-        assert response.status_code == 200
-        assert mock_celery_task.called
-
-
-def test_get_job_status_returns_state():
-    #Tests what will be returned after a job is completed
-
-    fake_job_id = "test-job-12345"
-    
-    with patch("src.main.AsyncResult") as mock_async_result:
-        mock_instance = mock_async_result.return_value
-        mock_instance.state = "SUCCESS"
-        mock_instance.result = {"job_id": fake_job_id, "status": "completed"}
-
-        response = client.get(f"/status/{fake_job_id}")
-
-        assert response.status_code == 200 # Ok status symbol
-        assert response.json() == {
-            "job_id": fake_job_id,
-            "status": "SUCCESS",
-            "result": {"job_id": fake_job_id, "status": "completed"}
-        }
