@@ -79,12 +79,14 @@ async def stream_audio(websocket: WebSocket, job_id: str):
     await websocket.accept() # Handshake
 
     # Connects to the redis server and defines channel name 
-    redis_connection = await aioredis.from_url("redis://localhost:6379/0")
+    
+    redis_connection = None
     stream_key = f"audio_stream:{job_id}"
     last_id = "0-0" # start of stream
 
     # Grabs events while waiting for audio
     try:
+        redis_connection = await aioredis.from_url("redis://localhost:6379/0") 
         while True: # Until out of audio or disconnection
 
             response = await redis_connection.xread(
@@ -107,7 +109,12 @@ async def stream_audio(websocket: WebSocket, job_id: str):
     #Exiting safely
     except WebSocketDisconnect:
         logger.info(f"Client disconnected from stream: {job_id}")
+    except aioredis.RedisError as re:
+        logger.error(f"Redis stream error for job {job_id}: {re}")
+        await websocket.close(code=1011, reason="Stream storage failure")
     except Exception as e:
         logger.error(f"Unexpected error in WebSocket stream {job_id}: {e}")
+        await websocket.close(code=1011, reason="Internal server error")
     finally:
-        await redis_connection.close()
+        if redis_connection:
+            await redis_connection.close()
