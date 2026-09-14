@@ -7,8 +7,9 @@
     <style>
         body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
         .card { border: 1px solid #ccc; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .controls { margin-top: 15px; display: flex; gap: 10px; }
         button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; }
-        button:disabled { background: #cccccc; }
+        button:disabled { background: #cccccc; cursor: not-allowed; }
         #status { margin-top: 15px; font-weight: bold; color: #333; }
     </style>
 </head>
@@ -16,7 +17,10 @@
     <div class="card">
         <h2>Page2Speech PDF Streamer</h2>
         <input type="file" id="pdfInput" accept="application/pdf">
-        <button id="uploadBtn" onclick="uploadAndStream()">Upload & Stream</button>
+        <div class="controls">
+            <button id="uploadBtn" onclick="uploadAndStream()">Upload & Stream</button>
+            <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
+        </div>
         <div id="status">Status: Idle</div>
     </div>
 
@@ -28,6 +32,7 @@
             const fileInput = document.getElementById('pdfInput');
             const statusDiv = document.getElementById('status');
             const uploadBtn = document.getElementById('uploadBtn');
+            const pauseBtn = document.getElementById('pauseBtn');
 
             if (!fileInput.files.length) {
                 alert('Please select a PDF file first.');
@@ -35,10 +40,20 @@
             }
 
             uploadBtn.disabled = true;
+            pauseBtn.disabled = false;
+            pauseBtn.innerText = 'Pause';
             statusDiv.innerText = 'Status: Uploading PDF...';
 
-            // Initialize Web Audio Context (24kHz standard sample rate for Kokoro)
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            // Initialize or reuse AudioContext
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            }
+
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+
+            // Reset sequence clock for new stream
             nextStartTime = audioCtx.currentTime;
 
             const formData = new FormData();
@@ -59,7 +74,7 @@
                 const jobId = data.job_id;
                 statusDiv.innerText = `Status: Job ${jobId} created. Connecting WebSocket...`;
 
-                // 2. Open WebSocket to stream PCM audio chunks
+                // 2. Open WebSocket connection
                 const ws = new WebSocket(`ws://localhost:8000/stream/${jobId}`);
                 ws.binaryType = 'arraybuffer';
 
@@ -67,28 +82,39 @@
                     statusDiv.innerText = 'Status: Streaming audio...';
                 };
 
-                ws.onmessage = (event) => {
-                    playPcmChunk(event.data);
+                ws.onmessage = async (event) => {
+                    try {
+                        await playPcmChunk(event.data);
+                    } catch (err) {
+                        console.error('Audio chunk error:', err);
+                    }
                 };
 
-                ws.onclose = (e) => {
+                ws.onclose = () => {
                     statusDiv.innerText = 'Status: Stream finished.';
                     uploadBtn.disabled = false;
+                    pauseBtn.disabled = true;
                 };
 
                 ws.onerror = (err) => {
+                    console.error('WebSocket Error:', err);
                     statusDiv.innerText = 'Status: WebSocket error occurred.';
                     uploadBtn.disabled = false;
+                    pauseBtn.disabled = true;
                 };
 
             } catch (err) {
+                console.error('Pipeline Error:', err);
                 statusDiv.innerText = `Error: ${err.message}`;
                 uploadBtn.disabled = false;
+                pauseBtn.disabled = true;
             }
         }
 
-        function playPcmChunk(arrayBuffer) {
-            // Convert 16-bit PCM bytes back into floating point samples [-1.0, 1.0]
+        async function playPcmChunk(arrayBuffer) {
+            if (!arrayBuffer || arrayBuffer.byteLength === 0) return;
+
+            // Convert 16-bit signed PCM bytes back to Float32 [-1.0, 1.0]
             const int16Array = new Int16Array(arrayBuffer);
             const float32Array = new Float32Array(int16Array.length);
 
@@ -103,10 +129,27 @@
             source.buffer = audioBuffer;
             source.connect(audioCtx.destination);
 
-            // Queue chunks sequentially without overlaps
+            // Queue chunks sequentially without overlap
             const startTime = Math.max(audioCtx.currentTime, nextStartTime);
             source.start(startTime);
             nextStartTime = startTime + audioBuffer.duration;
+        }
+
+        async function togglePause() {
+            const pauseBtn = document.getElementById('pauseBtn');
+            const statusDiv = document.getElementById('status');
+
+            if (!audioCtx) return;
+
+            if (audioCtx.state === 'running') {
+                await audioCtx.suspend();
+                pauseBtn.innerText = 'Resume';
+                statusDiv.innerText = 'Status: Paused';
+            } else if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+                pauseBtn.innerText = 'Pause';
+                statusDiv.innerText = 'Status: Streaming audio...';
+            }
         }
     </script>
 </body>
