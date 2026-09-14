@@ -11,22 +11,61 @@
         button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; }
         button:disabled { background: #cccccc; cursor: not-allowed; }
         #status { margin-top: 15px; font-weight: bold; color: #333; }
+        
+        /* Progress Bar Styles */
+        .progress-container { margin-top: 20px; }
+        .progress-bar-bg { width: 100%; height: 12px; background-color: #e0e0e0; border-radius: 6px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; width: 0%; background-color: #28a745; transition: width 0.2s linear; }
+        .time-display { display: flex; justify-content: space-between; font-size: 12px; color: #666; margin-top: 5px; }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>Page2Speech PDF Streamer</h2>
         <input type="file" id="pdfInput" accept="application/pdf">
+        
         <div class="controls">
             <button id="uploadBtn" onclick="uploadAndStream()">Upload & Stream</button>
             <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
         </div>
+
+        <div class="progress-container">
+            <div class="progress-bar-bg">
+                <div id="progressFill" class="progress-bar-fill"></div>
+            </div>
+            <div class="time-display">
+                <span id="currentTimeText">0:00</span>
+                <span id="bufferedTimeText">0:00</span>
+            </div>
+        </div>
+
         <div id="status">Status: Idle</div>
     </div>
 
     <script>
         let audioCtx = null;
         let nextStartTime = 0;
+        let totalBufferedDuration = 0;
+        let audioStartTime = 0;
+        let progressInterval = null;
+        let activeWs = null;
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        }
+
+        function updateProgressBar() {
+            if (!audioCtx || !totalBufferedDuration) return;
+
+            const playedTime = Math.max(0, audioCtx.currentTime - audioStartTime);
+            const progressPercent = Math.min(100, (playedTime / totalBufferedDuration) * 100);
+
+            document.getElementById('progressFill').style.width = `${progressPercent}%`;
+            document.getElementById('currentTimeText').innerText = formatTime(playedTime);
+            document.getElementById('bufferedTimeText').innerText = formatTime(totalBufferedDuration);
+        }
 
         async function uploadAndStream() {
             const fileInput = document.getElementById('pdfInput');
@@ -39,50 +78,63 @@
                 return;
             }
 
+            // Close any existing active WebSocket connection to prevent state overlaps
+            if (activeWs) {
+                activeWs.close();
+                activeWs = null;
+            }
+
             uploadBtn.disabled = true;
             pauseBtn.disabled = false;
             pauseBtn.innerText = 'Pause';
             statusDiv.innerText = 'Status: Uploading PDF...';
 
-            // Initialize or reuse AudioContext
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            // Reset progress tracking & UI clocks
+            totalBufferedDuration = 0;
+            document.getElementById('progressFill').style.width = '0%';
+            document.getElementById('currentTimeText').innerText = '0:00';
+            document.getElementById('bufferedTimeText').innerText = '0:00';
+
+            // Re-initialize AudioContext cleanly on fresh uploads
+            if (audioCtx) {
+                await audioCtx.close();
             }
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
 
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
             }
 
-            // Reset sequence clock for new stream
             nextStartTime = audioCtx.currentTime;
+            audioStartTime = audioCtx.currentTime;
+
+            // Start visual timer tick
+            if (progressInterval) clearInterval(progressInterval);
+            progressInterval = setInterval(updateProgressBar, 100);
 
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
 
             try {
-                // 1. Send upload request to FastAPI Gateway
                 const response = await fetch('http://localhost:8000/upload', {
                     method: 'POST',
                     body: formData
                 });
 
-                if (!response.ok) {
-                    throw new Error(`Upload failed: ${response.statusText}`);
-                }
+                if (!response.ok) throw new Error(`Upload failed: ${response.statusText}`);
 
                 const data = await response.json();
                 const jobId = data.job_id;
-                statusDiv.innerText = `Status: Job ${jobId} created. Connecting WebSocket...`;
+                statusDiv.innerText = `Status: Processing job ${jobId}...`;
 
-                // 2. Open WebSocket connection
-                const ws = new WebSocket(`ws://localhost:8000/stream/${jobId}`);
-                ws.binaryType = 'arraybuffer';
+                activeWs = new WebSocket(`ws://localhost:8000/stream/${jobId}`);
+                activeWs.binaryType = 'arraybuffer';
 
-                ws.onopen = () => {
+                activeWs.onopen = () => {
                     statusDiv.innerText = 'Status: Streaming audio...';
                 };
 
-                ws.onmessage = async (event) => {
+                activeWs.onmessage = async (event) => {
                     try {
                         await playPcmChunk(event.data);
                     } catch (err) {
@@ -90,17 +142,23 @@
                     }
                 };
 
-                ws.onclose = () => {
-                    statusDiv.innerText = 'Status: Stream finished.';
+                activeWs.onclose = (event) => {
+                    if (event.code === 1000) {
+                        statusDiv.innerText = 'Status: Stream finished.';
+                    } else {
+                        statusDiv.innerText = `Status: Stream closed with code ${event.code} (${event.reason || 'Unknown error'})`;
+                    }
                     uploadBtn.disabled = false;
                     pauseBtn.disabled = true;
+                    if (progressInterval) clearInterval(progressInterval);
                 };
 
-                ws.onerror = (err) => {
+                activeWs.onerror = (err) => {
                     console.error('WebSocket Error:', err);
                     statusDiv.innerText = 'Status: WebSocket error occurred.';
                     uploadBtn.disabled = false;
                     pauseBtn.disabled = true;
+                    if (progressInterval) clearInterval(progressInterval);
                 };
 
             } catch (err) {
@@ -108,13 +166,13 @@
                 statusDiv.innerText = `Error: ${err.message}`;
                 uploadBtn.disabled = false;
                 pauseBtn.disabled = true;
+                if (progressInterval) clearInterval(progressInterval);
             }
         }
 
         async function playPcmChunk(arrayBuffer) {
             if (!arrayBuffer || arrayBuffer.byteLength === 0) return;
 
-            // Convert 16-bit signed PCM bytes back to Float32 [-1.0, 1.0]
             const int16Array = new Int16Array(arrayBuffer);
             const float32Array = new Float32Array(int16Array.length);
 
@@ -125,11 +183,13 @@
             const audioBuffer = audioCtx.createBuffer(1, float32Array.length, 24000);
             audioBuffer.getChannelData(0).set(float32Array);
 
+            totalBufferedDuration += audioBuffer.duration;
+
             const source = audioCtx.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(audioCtx.destination);
 
-            // Queue chunks sequentially without overlap
+            // Synchronize play head to current audio clock to eliminate overlap distortion
             const startTime = Math.max(audioCtx.currentTime, nextStartTime);
             source.start(startTime);
             nextStartTime = startTime + audioBuffer.duration;

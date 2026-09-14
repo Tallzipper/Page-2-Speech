@@ -1,3 +1,4 @@
+import os
 import uuid
 import logging # Error handler
 import pathlib
@@ -8,6 +9,8 @@ from celery.result import AsyncResult
 from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Storage for PDFs uploaded
 UPLOAD_DIR = pathlib.Path("/tmp/uploads")
@@ -54,8 +57,10 @@ async def upload_pdf(file: UploadFile = File(...)):
         logger.error(f"Failed to save upload for {job_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error during upload")
 
+
+
     # Reads binary stream and processes it through Celery
-    process_pdf_task.delay(job_id, str(file_path))
+    process_pdf_task.apply_async(args=[job_id, str(file_path)], task_id=job_id)
 
     return {"job_id": job_id, "status": "processing"} # Sends back job id and status
 
@@ -68,7 +73,7 @@ def get_job_status(job_id: str):
     return{
         "job_id": job_id,
         "status": task_result.state,
-        "result": task_result.result
+        "result": task_result.result if task_result.ready() else None
     }
 
 
@@ -83,17 +88,25 @@ async def stream_audio(websocket: WebSocket, job_id: str):
     redis_connection = None
     stream_key = f"audio_stream:{job_id}"
     last_id = "0-0" # start of stream
+    task_result = AsyncResult(job_id, app=celery_app)
 
     # Grabs events while waiting for audio
     try:
-        redis_connection = await aioredis.from_url("redis://localhost:6379/0") 
+        redis_connection = await aioredis.from_url(REDIS_URL) 
         while True: # Until out of audio or disconnection
 
+            # Prevent infinite hang if background task fails silently
+            if task_result.failed():
+                logger.error(f"Celery task failed for job {job_id}")
+                await websocket.close(code=1011, reason="Task execution failed")
+                return
+
             response = await redis_connection.xread(
-                {stream_key: last_id}, count=10, block=1000
+                {stream_key: last_id}, count=10, block=500
             )
             if not response:
                 continue
+            await redis_connection.expire(stream_key, 600)
 
             for stream_name, messages in response:
                 for message_id, fields in messages:

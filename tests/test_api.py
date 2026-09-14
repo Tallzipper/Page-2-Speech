@@ -1,20 +1,19 @@
 import io
-from fastapi.testclient import TestClient # Testing for FastAPI
-from src.main import app # creates the app instance
-from unittest.mock import patch # Used to make mock objects
+import pathlib
+from fastapi.testclient import TestClient  # Testing for FastAPI
+from src.main import app  # creates the app instance
+from unittest.mock import patch  # Used to make mock objects
 
 # Creates a mock HTTP connected to the FastAPI
 client = TestClient(app) 
 
-@patch("src.main.process_pdf_task.delay")
-def test_upload_pdf_pipeline(mock_celery_delay):
+@patch("src.main.process_pdf_task.apply_async")
+def test_upload_pdf_pipeline(mock_celery_async):
 
     # Creates an in-memory pdf
     fake_pdf_content = b"%PDF-1.4 Fake PDF Content"
     files = {"file": ("sample.pdf", fake_pdf_content, "application/pdf")}
 
-    mock_celery_delay.return_value.id = "mock-task-id-143"
-    
     response = client.post("/upload", files=files)
 
     assert response.status_code == 200
@@ -22,9 +21,21 @@ def test_upload_pdf_pipeline(mock_celery_delay):
     assert "job_id" in data
     assert data["status"] == "processing"
 
-    mock_celery_delay.assert_called_once_with(data["job_id"], fake_pdf_content)
+    # Verify apply_async was called and inspect the actual arguments passed by main.py
+    assert mock_celery_async.called
+    call_kwargs = mock_celery_async.call_args.kwargs
 
-# Intentionally failing
+    called_job_id, called_path_str = call_kwargs["args"]
+    
+    # Assert the task was dispatched with the same job_id returned to the client
+    assert called_job_id == data["job_id"]
+    assert call_kwargs["task_id"] == data["job_id"]
+    
+    # Construct OS-native path using pathlib to ensure Windows & Linux compatibility
+    expected_path_str = str(pathlib.Path("/tmp/uploads") / f"{data['job_id']}.pdf")
+    assert called_path_str == expected_path_str
+
+# Non-PDF upload rejection test
 def test_upload_non_pdf_fails():
 
     # create non-pdf file
@@ -35,4 +46,4 @@ def test_upload_non_pdf_fails():
     response = client.post("/upload", files=files)
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "File must be a PDF"
+    assert response.json() == {"detail": "File must be a PDF"}

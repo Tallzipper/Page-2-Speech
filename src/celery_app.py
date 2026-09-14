@@ -1,29 +1,32 @@
 import pathlib
 import logging 
 import redis
+import os
 from celery import Celery # Only need Celery class
 from src.parser import extract_text_chunks
 from src.engine import text_to_pcm_stream
 
 logger = logging.getLogger(__name__)
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
 # Initializes Celery with Redis
 celery_app = Celery(
 
     "tasks",
-    broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/0"
+    broker=REDIS_URL,
+    backend=REDIS_URL
 
 )
 
-redis_client = redis.Redis(host = "localhost", port = 6379, db = 0)
+redis_client = redis.Redis.from_url(REDIS_URL)
 
 @celery_app.task
 def process_pdf_task(job_id: str, file_path: str):
 
     if isinstance(file_path, bytes):
         file_path = file_path.decode("utf-8")
-        
+
     path = pathlib.Path(file_path)
     stream_key = f"audio_stream:{job_id}"
 

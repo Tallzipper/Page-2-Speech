@@ -14,6 +14,6 @@ def test_extract_text_chunks_from_pdf():
     pdf_bytes = doc.tobytes() 
     doc.close()
 
-    # Sentence extracted and checked
+    # Sentence extracted and checked ("2" normalizes to "two")
     chunks = extract_text_chunks(pdf_bytes)
-    assert chunks == ["Hello World, this is Page 2 Speech."]
+    assert chunks == ["Hello World, this is Page two Speech."]
