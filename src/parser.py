@@ -19,8 +19,17 @@ ABBREVIATIONS = {
     r"\betc\.\b": "et cetera",
 }
 
+# Regular expressions 
+THOUSANDS_COMMA_RE = re.compile(r"(?<=\d),(?=\d)")
+ROMAN_CHAPTER_RE = re.compile(r"\b(Chapter)\s+\b(I|II|III|IV|V|VI|VII|VIII|IX|X)\b", re.IGNORECASE)
+CURRENCY_RE = re.compile(r"\$(\d+(?:\.\d{1,2})?)")
+DIGITS_RE = re.compile(r"\b\d+\b")
+
 # Fixes the majority that might be misread by the the program 
 def normalize_text(text: str) -> str:
+
+    # Clean thousands separators ($1,000 -> $1000) 
+    text = THOUSANDS_COMMA_RE.sub("", text)
 
     # When a roman Numeral is found as a chapter, converts to number
     def replace_chapter(match):
@@ -29,18 +38,21 @@ def normalize_text(text: str) -> str:
         return f"{prefix} {ROMAN_MAP.get(numeral.upper(), numeral)}"   
 
     #Scans for roman numerals
-    text = re.sub(r"\b(Chapter)\s+\b(I|II|III|IV|V|VI|VII|VIII|IX|X)\b", replace_chapter, text, flags=re.IGNORECASE)
+    text = ROMAN_CHAPTER_RE.sub(replace_chapter, text)
 
     # Scans for Titles and abbreviations
     for pattern, replacement in ABBREVIATIONS.items():
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE) 
 
     # Scans for Currencies
-    text = re.sub(r"\$(\d+(?:\.\d{1,2})?)", lambda m: num2words(m.group(1), to="currency", currency="USD"), text)
+    text = CURRENCY_RE.sub(
+        lambda m: num2words(m.group(1), to="currency", currency="USD"), 
+        text
+    )
 
     # Scans for Common Symbols and Numbers
-    text = re.sub(r"\b\d+\b", lambda m: num2words(int(m.group(0))), text)
     text = text.replace("%", " percent ").replace("&", " and ")
+    text = DIGITS_RE.sub(lambda m: num2words(int(m.group(0))), text)
 
     return text
 

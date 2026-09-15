@@ -12,11 +12,9 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Initializes Celery with Redis
 celery_app = Celery(
-
     "tasks",
     broker=REDIS_URL,
     backend=REDIS_URL
-
 )
 
 redis_client = redis.Redis.from_url(REDIS_URL)
@@ -42,8 +40,9 @@ def process_pdf_task(job_id: str, file_path: str):
             for pcm_bytes in text_to_pcm_stream(chunk):
                 redis_client.xadd(stream_key, {"data": pcm_bytes})
 
-        redis_client.xadd(stream_key, {"data": b"__COMPLETE__"}) # Notifies gateway its done
-        redis_client.expire(stream_key, 3600) # 1 hour experation
+        # Notifies gateway it's done and sets stream TTL unconditionally
+        redis_client.xadd(stream_key, {"data": b"__COMPLETE__"})
+        redis_client.expire(stream_key, 3600)  # 1 hour expiration
 
         return {"job_id": job_id, "status": "completed"} 
     except Exception as e:

@@ -104,9 +104,13 @@ async def stream_audio(websocket: WebSocket, job_id: str):
             response = await redis_connection.xread(
                 {stream_key: last_id}, count=10, block=500
             )
+
             if not response:
+                if task_result.failed(): # Checks data stopped coming
+                    logger.error(f"Celery task failed for job {job_id}")
+                    await websocket.close(code=1011, reason="Task execution failed")
+                    return
                 continue
-            await redis_connection.expire(stream_key, 600)
 
             for stream_name, messages in response:
                 for message_id, fields in messages:
