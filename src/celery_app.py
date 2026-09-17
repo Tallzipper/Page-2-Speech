@@ -1,3 +1,4 @@
+import hashlib
 import pathlib
 import logging 
 import redis
@@ -28,21 +29,32 @@ def process_pdf_task(job_id: str, file_path: str):
     path = pathlib.Path(file_path)
     stream_key = f"audio_stream:{job_id}"
 
-    # Get the audio chunks and if you can't send an error
     try:
         with open(path, "rb") as f:
             pdf_bytes = f.read()
 
         text_chunks = extract_text_chunks(pdf_bytes)
 
-        # Have each sentence into audio chunks and push to Redis Pub/Sub 'O(n)'
+        # Gets hash sentence cache and checks Redis to see if each sentence was at one point processed
         for chunk in text_chunks:
-            for pcm_bytes in text_to_pcm_stream(chunk):
-                redis_client.xadd(stream_key, {"data": pcm_bytes})
+            sentence_hash = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+            cache_key = f"cache:audio:{sentence_hash}"
 
-        # Notifies gateway it's done and sets stream TTL unconditionally
+            cached_pcm = redis_client.get(cache_key)
+
+            if cached_pcm is not None: # Scanned before, send existing sentence
+                redis_client.xadd(stream_key, {"data": cached_pcm})
+            else: # Never scanned, process it
+                accumulated_pcm = bytearray()
+                for pcm_bytes in text_to_pcm_stream(chunk):
+                    redis_client.xadd(stream_key, {"data": pcm_bytes})
+                    accumulated_pcm.extend(pcm_bytes)
+
+                if accumulated_pcm: # If now exists, store it for 24 hours
+                    redis_client.setex(cache_key, 86400, bytes(accumulated_pcm))
+
         redis_client.xadd(stream_key, {"data": b"__COMPLETE__"})
-        redis_client.expire(stream_key, 3600)  # 1 hour expiration
+        redis_client.expire(stream_key, 3600)
 
         return {"job_id": job_id, "status": "completed"} 
     except Exception as e:
