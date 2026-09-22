@@ -2,3 +2,11 @@ kokoro
 numpy
 PyMuPDF
 soundfile
+fastapi
+uvicorn
+redis
+celery
+torch
+torchaudio
+python-multipart
+websockets>=12.0

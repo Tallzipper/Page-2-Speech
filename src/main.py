@@ -4,6 +4,7 @@ import logging # Error handler
 import pathlib
 import redis.asyncio as aioredis
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from src.celery_app import process_pdf_task, celery_app
 from celery.result import AsyncResult
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,6 +76,10 @@ def get_job_status(job_id: str):
         "status": task_result.state,
         "result": task_result.result if task_result.ready() else None
     }
+
+@app.get("/")
+async def serve_index():
+    return FileResponse("index.html")
 
 
 # Bridges Pub/Sub events to a WebSocket connection to reduce latency
