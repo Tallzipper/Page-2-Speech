@@ -53,12 +53,15 @@ pytest tests/test_end_2_end.py::test_pipeline -v -s
 
 ```
 
-## Known Issues
 
-- **Inflexible Input Format:** The API gateway exclusively accepts PDF files (`.pdf`) and will reject other document types like `.docx` or `.txt`.
-- **Inaccurate Duration Display:** The media player usually displays an inaccurate total file time or duration bar because raw PCM audio chunks are streamed dynamically before full synthesis completes.
-- **No Direct Download:** The system streams real-time PCM audio chunks directly to browser buffers so there is currently no option to export or download the complete compiled audio file (`.wav` or `.mp3`) directly from the site.
-- **Initial Delay on Large Files:** Multi-page or heavy PDF documents require initial sequential parsing and sentence extraction before the first audio chunk starts streaming.
+### Known Issues
+
+> **Note on Issue Tracking:** Core pipeline logic and system completion are prioritized ahead of external issue tracking. The problems below will be made into official 'issues' after it's finished to ensure that nothing is messed with before its entirely what I envisioned
+
+* **Inflexible Input Format:** The API gateway exclusively accepts PDF files (`.pdf`) and rejects other document types like `.docx` or `.txt`.
+* **Inaccurate Duration Display:** The media player displays an approximate total file time because raw PCM audio chunks stream dynamically before full synthesis completes.
+* **No Direct Download:** The system streams real-time PCM audio chunks directly to browser buffers, with no current option to export or download compiled audio files (`.wav` or `.mp3`).
+* **Initial Delay on Large Files:** Multi-page PDF documents require initial sequential parsing and sentence extraction before the first audio chunk starts streaming.
 
 ## Author's Note
 
